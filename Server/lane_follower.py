@@ -36,13 +36,13 @@ class ImageProcessor:
         roi = frame[y1:y2].copy()
         
         # Convert to HSV color space to better isolate the dark lines from the white mat.
-        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-        value = hsv[:, :, 2]
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2LAB)
+        L = hsv[:, :, 0] # Use the L channel for value-based thresholding
         
         # Create a binary image by thresholding the value channel.
         # Pixels with a value less than the threshold are considered part of the black lines.
         # The result is a binary image where the lines are white (255) and the background is black (0).
-        binary = ((value < self.cfg.value_threshold) * 255).astype(np.uint8)
+        binary = ((L < self.cfg.value_threshold) * 255).astype(np.uint8)
 
         # Apply morphological operations to clean up the binary image.
         # 'MORPH_OPEN' removes small noise specks.

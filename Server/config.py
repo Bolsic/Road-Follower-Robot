@@ -15,7 +15,7 @@ class Config:
     # Control mode
     control_mode: str = os.getenv("CONTROL_MODE", "MANUAL").upper()
     manual_speed: int = int(os.getenv("MANUAL_SPEED", "70"))
-    manual_turn_speed: int = int(os.getenv("MANUAL_TURN_SPEED", "60"))
+    manual_turn_speed: int = int(os.getenv("MANUAL_TURN_SPEED", "80"))
     auto_stop_on_no_frame: bool = os.getenv("AUTO_STOP_ON_NO_FRAME", "1") == "1"
 
     width: int = 320
@@ -31,7 +31,7 @@ class Config:
     scan_row_fracs: tuple[float, float, float] = (0.90, 0.72, 0.52)
 
     # Value threshold for line detection (only dark pixels can be lines)
-    value_threshold: int = 100  # regions with value < this are considered black
+    value_threshold: int = 80  # regions with value < this are considered black
     morph_kernel: int = 3
     min_black_run_width: int = 5
 
