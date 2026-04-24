@@ -29,7 +29,7 @@ class RobotClient:
             # Send the command as an HTTP GET request.
             r = self.session.get(
                 f"{self.cfg.drive_base}/drive",
-                params={"l": left, "r": right},
+                params={"l": -left, "r": -right},
                 timeout=self.cfg.drive_timeout_s,
             )
             return r.ok
