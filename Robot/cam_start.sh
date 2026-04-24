@@ -3,7 +3,8 @@ set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_DIR="$APP_DIR/logs"
-CAM_SCRIPT="$APP_DIR/robot_camera_stream.py"
+CAM_SCRIPT="$APP_DIR/cam_server.py"
+CAM_HOST="${CAM_HOST:-0.0.0.0}"
 
 mkdir -p "$LOG_DIR"
 
@@ -25,9 +26,9 @@ echo "================ CAMERA SERVICE STARTED ================"
 echo "Camera PID : $CAM_PID"
 echo
 echo "Health URLs:"
-echo "  Camera health : http://192.168.0.18:8081/health"
-echo "  Snapshot      : http://192.168.0.18:8081/snapshot.jpg"
-echo "  MJPEG stream  : http://192.168.0.18:8081/stream.mjpg"
+echo "  Camera health : http://$CAM_HOST:8081/health"
+echo "  Snapshot      : http://$CAM_HOST:8081/snapshot.jpg"
+echo "  MJPEG stream  : http://$CAM_HOST:8081/stream.mjpg"
 echo
 echo "Log:"
 echo "  $LOG_DIR/camera.log"
