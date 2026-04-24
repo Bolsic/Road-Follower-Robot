@@ -2,8 +2,11 @@
 set -euo pipefail
 
 MEDIAMTX_VERSION="${MEDIAMTX_VERSION:-1.8.4}"
-MEDIAMTX_DIR="${MEDIAMTX_DIR:-$HOME/mediamtx}"
-MEDIAMTX_BIN="${MEDIAMTX_BIN:-$MEDIAMTX_DIR/mediamtx}"
+MEDIAMTX_BIN="${MEDIAMTX_BIN:-$HOME/mediamtx}"
+if [ -d "${MEDIAMTX_BIN}" ]; then
+	MEDIAMTX_BIN="${MEDIAMTX_BIN}/mediamtx"
+fi
+MEDIAMTX_DIR="$(dirname "${MEDIAMTX_BIN}")"
 MEDIAMTX_CFG="${MEDIAMTX_CFG:-$HOME/mediamtx.yml}"
 RTSP_PATH="${RTSP_PATH:-robot}"
 RTSP_PORT="${RTSP_PORT:-8554}"
