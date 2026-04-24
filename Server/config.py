@@ -1,10 +1,16 @@
+import os
 from dataclasses import dataclass
+
+
+ROBOT_HOST = os.getenv("ROBOT_HOST", "192.168.1.103")
+WHEP_URL_DEFAULT = f"http://{ROBOT_HOST}:8889/robot/whep"
+DRIVE_BASE_DEFAULT = f"http://{ROBOT_HOST}:8090"
 
 
 @dataclass
 class Config:
-    whep_url: str = "http://192.168.1.103:8888/robot"
-    drive_base: str = "http://192.168.1.103:8090"
+    whep_url: str = os.getenv("WHEP_URL", WHEP_URL_DEFAULT)
+    drive_base: str = os.getenv("DRIVE_BASE", DRIVE_BASE_DEFAULT)
 
     width: int = 320
     height: int = 240
