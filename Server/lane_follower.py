@@ -87,42 +87,6 @@ class ImageProcessor:
 
         return runs
 
-    def pick_side_runs(
-        self,
-        runs: list[tuple[int, int]],
-        width: int,
-    ) -> tuple[Optional[float], Optional[float]]:
-        """
-        From a list of runs in a row, this function identifies the most likely
-        candidates for the left and right lane lines.
-        """
-        img_center = width / 2.0
-
-        left_x: Optional[float] = None
-        right_x: Optional[float] = None
-        best_left_score = -1e9
-        best_right_score = -1e9
-
-        # Score each run based on its width and proximity to the image center.
-        # A wider run that is further from the center is more likely to be a lane line.
-        for r1, r2 in runs:
-            run_w = r2 - r1 + 1
-            cx = 0.5 * (r1 + r2)
-
-            if cx < img_center: # Potential left line
-                score = 3.0 * run_w - 0.7 * abs(cx - img_center)
-                if score > best_left_score:
-                    best_left_score = score
-                    left_x = cx
-
-            if cx > img_center: # Potential right line
-                score = 3.0 * run_w - 0.7 * abs(cx - img_center)
-                if score > best_right_score:
-                    best_right_score = score
-                    right_x = cx
-
-        return left_x, right_x
-
 
 class LaneFollower:
     def __init__(self, cfg: Config) -> None:
@@ -159,8 +123,6 @@ class LaneFollower:
         binary_viz = cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
         masked_out = ~combined_mask
         binary_viz[masked_out] = (255, 0, 255) # Purple
-
-        img_center = roi_w * self.cfg.img_center_coef
 
         # TODO: Think of a better scan method
         # Define the horizontal scan lines within the ROI.
