@@ -190,10 +190,10 @@ class LaneFollower:
                 run_center = (runs[0][0] + runs[0][1]) / 2.0
                 if self.default_line_side == 'right':
                     right_x = run_center
-                    left_x = 0  # Left edge of the screen
+                    left_x = None
                 else:
                     left_x = run_center
-                    right_x = roi_w -1 # Right edge of the screen
+                    right_x = None
             else:
                 # If multiple runs are detected, the rightmost is the right line
                 # and the leftmost is the left line.
