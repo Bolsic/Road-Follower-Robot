@@ -12,6 +12,12 @@ class Config:
     whep_url: str = os.getenv("WHEP_URL", WHEP_URL_DEFAULT)
     drive_base: str = os.getenv("DRIVE_BASE", DRIVE_BASE_DEFAULT)
 
+    # Control mode
+    control_mode: str = os.getenv("CONTROL_MODE", "MANUAL").upper()
+    manual_speed: int = int(os.getenv("MANUAL_SPEED", "70"))
+    manual_turn_speed: int = int(os.getenv("MANUAL_TURN_SPEED", "60"))
+    auto_stop_on_no_frame: bool = os.getenv("AUTO_STOP_ON_NO_FRAME", "1") == "1"
+
     width: int = 320
     height: int = 240
     flip: bool = False
