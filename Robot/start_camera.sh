@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MEDIAMTX_BIN="${MEDIAMTX_BIN:-$HOME/mediamtx/mediamtx}"
+MEDIAMTX_VERSION="${MEDIAMTX_VERSION:-1.8.4}"
+MEDIAMTX_DIR="${MEDIAMTX_DIR:-$HOME/mediamtx}"
+MEDIAMTX_BIN="${MEDIAMTX_BIN:-$MEDIAMTX_DIR/mediamtx}"
 MEDIAMTX_CFG="${MEDIAMTX_CFG:-$HOME/mediamtx.yml}"
 RTSP_PATH="${RTSP_PATH:-robot}"
 RTSP_PORT="${RTSP_PORT:-8554}"
@@ -12,10 +14,44 @@ INPUT_FORMAT="${INPUT_FORMAT:-mjpeg}"
 CAMERA_DEVICE="${CAMERA_DEVICE:-/dev/video0}"
 FFMPEG_LOGLEVEL="${FFMPEG_LOGLEVEL:-warning}"
 
-if [ ! -x "${MEDIAMTX_BIN}" ]; then
-	echo "mediamtx binary not found: ${MEDIAMTX_BIN}" >&2
-	exit 1
-fi
+install_mediamtx_if_missing() {
+	if [ -x "${MEDIAMTX_BIN}" ]; then
+		return
+	fi
+
+	if ! command -v curl >/dev/null 2>&1; then
+		echo "curl not found in PATH (required to download MediaMTX)" >&2
+		exit 1
+	fi
+
+	if ! command -v tar >/dev/null 2>&1; then
+		echo "tar not found in PATH (required to extract MediaMTX)" >&2
+		exit 1
+	fi
+
+	mkdir -p "$(dirname "${MEDIAMTX_BIN}")"
+
+	ARCH="$(uname -m)"
+	case "${ARCH}" in
+		aarch64|arm64) PKG_ARCH="arm64" ;;
+		armv7l|armv6l|armhf) PKG_ARCH="armv7" ;;
+		x86_64|amd64) PKG_ARCH="amd64" ;;
+		*) echo "unsupported architecture for MediaMTX: ${ARCH}" >&2; exit 1 ;;
+	esac
+
+	TMPDIR="$(mktemp -d)"
+	ARCHIVE="${TMPDIR}/mediamtx.tar.gz"
+	URL="https://github.com/bluenviron/mediamtx/releases/download/v${MEDIAMTX_VERSION}/mediamtx_v${MEDIAMTX_VERSION}_linux_${PKG_ARCH}.tar.gz"
+
+	echo "MediaMTX not found, downloading ${URL}"
+	curl -fsSL "${URL}" -o "${ARCHIVE}"
+	tar -xzf "${ARCHIVE}" -C "${TMPDIR}"
+	install -m 755 "${TMPDIR}/mediamtx" "${MEDIAMTX_BIN}"
+	rm -rf "${TMPDIR}"
+	echo "Installed MediaMTX to ${MEDIAMTX_BIN}"
+}
+
+install_mediamtx_if_missing
 
 if ! command -v ffmpeg >/dev/null 2>&1; then
 	echo "ffmpeg not found in PATH" >&2
@@ -42,7 +78,7 @@ rtspAddress: :${RTSP_PORT}
 webrtc: yes
 webrtcAddress: :${WEBRTC_PORT}
 paths:
-	${RTSP_PATH}:
+  ${RTSP_PATH}:
 EOF
 
 pkill -f "${MEDIAMTX_BIN}" >/dev/null 2>&1 || true
