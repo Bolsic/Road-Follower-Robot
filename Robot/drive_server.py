@@ -72,12 +72,47 @@ def clamp(v, lo, hi):
     return max(lo, min(hi, int(v)))
 
 
+def validate_pin_config(left: MotorPins, right: MotorPins):
+    pin_map = {
+        "LEFT_IN1": left.in1,
+        "LEFT_IN2": left.in2,
+        "LEFT_PWM": left.pwm,
+        "RIGHT_IN1": right.in1,
+        "RIGHT_IN2": right.in2,
+        "RIGHT_PWM": right.pwm,
+    }
+
+    seen = {}
+    duplicates = []
+    for name, pin in pin_map.items():
+        if pin in seen:
+            duplicates.append((name, seen[pin], pin))
+        else:
+            seen[pin] = name
+
+    if duplicates:
+        details = ", ".join(f"{a} and {b} share GPIO {p}" for a, b, p in duplicates)
+        raise ValueError(f"Invalid motor pin mapping: {details}")
+
+
 class DifferentialDriveGPIO:
     def __init__(self, left: MotorPins, right: MotorPins, pwm_freq_hz: int):
         self.left = left
         self.right = right
         self.pwm_freq_hz = pwm_freq_hz
         self.lock = threading.Lock()
+        self.left_state = {
+            "requested_speed": 0,
+            "effective_speed": 0,
+            "duty_cycle": 0.0,
+            "direction": "stop",
+        }
+        self.right_state = {
+            "requested_speed": 0,
+            "effective_speed": 0,
+            "duty_cycle": 0.0,
+            "direction": "stop",
+        }
 
         GPIO.setwarnings(GPIO_WARNINGS)
         GPIO.setmode(GPIO.BCM)
@@ -90,29 +125,53 @@ class DifferentialDriveGPIO:
         self.left_pwm.start(0)
         self.right_pwm.start(0)
 
-    def _apply_motor(self, cfg: MotorPins, pwm, speed: int):
-        speed = clamp(speed, -255, 255)
+    def _apply_motor(self, cfg: MotorPins, pwm, speed: int, side: str):
+        requested_speed = clamp(speed, -255, 255)
+        speed = requested_speed
         if cfg.invert:
             speed = -speed
 
         duty = (abs(speed) / 255.0) * 100.0
+        direction = "stop"
 
         if speed > 0:
             GPIO.output(cfg.in1, GPIO.HIGH)
             GPIO.output(cfg.in2, GPIO.LOW)
+            direction = "forward"
         elif speed < 0:
             GPIO.output(cfg.in1, GPIO.LOW)
             GPIO.output(cfg.in2, GPIO.HIGH)
+            direction = "reverse"
         else:
             GPIO.output(cfg.in1, GPIO.LOW)
             GPIO.output(cfg.in2, GPIO.LOW)
 
         pwm.ChangeDutyCycle(duty)
 
+        state = {
+            "requested_speed": requested_speed,
+            "effective_speed": speed,
+            "duty_cycle": duty,
+            "direction": direction,
+            "in1_level": int(GPIO.input(cfg.in1)),
+            "in2_level": int(GPIO.input(cfg.in2)),
+        }
+        if side == "left":
+            self.left_state = state
+        else:
+            self.right_state = state
+
     def set_speed(self, left_speed: int, right_speed: int):
         with self.lock:
-            self._apply_motor(self.left, self.left_pwm, left_speed)
-            self._apply_motor(self.right, self.right_pwm, right_speed)
+            self._apply_motor(self.left, self.left_pwm, left_speed, "left")
+            self._apply_motor(self.right, self.right_pwm, right_speed, "right")
+
+    def debug_snapshot(self):
+        with self.lock:
+            return {
+                "left": dict(self.left_state),
+                "right": dict(self.right_state),
+            }
 
     def stop(self):
         self.set_speed(0, 0)
@@ -191,7 +250,60 @@ class Handler(BaseHTTPRequestHandler):
                     "invert": RIGHT_MOTOR.invert,
                 },
                 "last_cmd": snapshot_last_cmd(),
+                "motor_state": drive.debug_snapshot() if drive is not None else None,
             })
+            return
+
+        if path == "/pins":
+            self._json(200, {
+                "ok": True,
+                "left_pins": {
+                    "in1": LEFT_MOTOR.in1,
+                    "in2": LEFT_MOTOR.in2,
+                    "pwm": LEFT_MOTOR.pwm,
+                    "invert": LEFT_MOTOR.invert,
+                    "in1_level": int(GPIO.input(LEFT_MOTOR.in1)),
+                    "in2_level": int(GPIO.input(LEFT_MOTOR.in2)),
+                },
+                "right_pins": {
+                    "in1": RIGHT_MOTOR.in1,
+                    "in2": RIGHT_MOTOR.in2,
+                    "pwm": RIGHT_MOTOR.pwm,
+                    "invert": RIGHT_MOTOR.invert,
+                    "in1_level": int(GPIO.input(RIGHT_MOTOR.in1)),
+                    "in2_level": int(GPIO.input(RIGHT_MOTOR.in2)),
+                },
+                "last_cmd": snapshot_last_cmd(),
+                "motor_state": drive.debug_snapshot() if drive is not None else None,
+            })
+            return
+
+        if path == "/test_motor":
+            try:
+                side = qs.get("side", ["both"])[0].lower()
+                if side not in ("left", "right", "both"):
+                    self._json(400, {"ok": False, "error": "side must be left|right|both"})
+                    return
+
+                speed = clamp(qs.get("speed", ["120"])[0], -255, 255)
+                duration_ms = clamp(qs.get("duration_ms", ["800"])[0], 100, 3000)
+
+                left = speed if side in ("left", "both") else 0
+                right = speed if side in ("right", "both") else 0
+
+                send_drive(left, right)
+                time.sleep(duration_ms / 1000.0)
+                send_drive(0, 0)
+
+                self._json(200, {
+                    "ok": True,
+                    "tested_side": side,
+                    "speed": speed,
+                    "duration_ms": duration_ms,
+                    "motor_state": drive.debug_snapshot() if drive is not None else None,
+                })
+            except Exception as e:
+                self._json(500, {"ok": False, "error": str(e)})
             return
 
         if path == "/stop":
@@ -254,6 +366,8 @@ def main():
             f"Import error: {GPIO_IMPORT_ERROR}"
         )
 
+    validate_pin_config(LEFT_MOTOR, RIGHT_MOTOR)
+
     drive = DifferentialDriveGPIO(LEFT_MOTOR, RIGHT_MOTOR, PWM_FREQ_HZ)
 
     signal.signal(signal.SIGINT, handle_signal)
@@ -262,7 +376,9 @@ def main():
     httpd = ThreadingHTTPServer(("0.0.0.0", HTTP_PORT), Handler)
     print(f"[HTTP] listening on {HTTP_PORT}")
     print(f"Health: http://0.0.0.0:{HTTP_PORT}/health")
+    print(f"Pins  : http://0.0.0.0:{HTTP_PORT}/pins")
     print(f"Drive : http://0.0.0.0:{HTTP_PORT}/drive?l=80&r=80")
+    print(f"Test  : http://0.0.0.0:{HTTP_PORT}/test_motor?side=left&speed=120&duration_ms=800")
     print(f"Stop  : http://0.0.0.0:{HTTP_PORT}/stop")
 
     try:
