@@ -4,7 +4,6 @@ import asyncio
 import threading
 import time
 from typing import Optional
-from urllib.parse import urljoin
 
 import aiohttp
 import av
@@ -38,7 +37,7 @@ class WHEPReceiver:
             self._status = status
             if error is not None:
                 self._last_error = error
-            elif status in ("starting", "connecting", "receiving"):
+            elif status in ("starting", "connecting", "awaiting_track", "receiving"):
                 self._last_error = None
 
     def get_debug_state(self) -> dict:
@@ -92,11 +91,21 @@ class WHEPReceiver:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            loop.run_until_complete(self._run_whep())
+            while self._running:
+                loop.run_until_complete(self._run_whep())
+                if not self._running:
+                    break
+                self._set_status("reconnecting")
+                time.sleep(1.0)
         except Exception as e:
             self._set_status("thread_crashed", str(e))
         finally:
             loop.close()
+
+    async def _wait_for_ice_gathering(self, pc: RTCPeerConnection, timeout_s: float = 5.0) -> None:
+        start = time.time()
+        while pc.iceGatheringState != "complete" and (time.time() - start) < timeout_s:
+            await asyncio.sleep(0.05)
 
     async def _run_whep(self) -> None:
         """
@@ -112,10 +121,11 @@ class WHEPReceiver:
             are read from the stream.
             """
             self._set_status("receiving")
+            timeout_count = 0
             while self._running:
                 try:
                     # Wait for the next frame
-                    frame = await asyncio.wait_for(track.recv(), timeout=1.0)
+                    frame = await asyncio.wait_for(track.recv(), timeout=2.5)
                     # Convert the frame to a numpy array for OpenCV
                     img = frame.to_ndarray(format="bgr24")
                     if self.flip:
@@ -125,13 +135,19 @@ class WHEPReceiver:
                         self._latest_frame = img
                         self._frames_received += 1
                         self._last_frame_ts = time.time()
+                    timeout_count = 0
                 except asyncio.TimeoutError:
-                    self._set_status("timeout", "track.recv timed out")
+                    timeout_count += 1
+                    self._set_status("awaiting_track", f"track.recv timed out ({timeout_count})")
+                    # Keep waiting because initial keyframes can be delayed.
+                    if timeout_count < 30:
+                        continue
+                    self._set_status("failed", "no frames received for 75s after track started")
                     break
                 except Exception as e:
                     self._set_status("track_error", str(e))
                     break
-            if self._running:
+            if self._running and timeout_count < 30:
                 self._set_status("stopped")
 
         @pc.on("connectionstatechange")
@@ -143,56 +159,48 @@ class WHEPReceiver:
             if pc.connectionState == "failed" or pc.connectionState == "closed":
                 await self.stop_whep(pc)
 
-        # The WHEP handshake process
+        # WHEP client role: create local SDP offer, POST as application/sdp,
+        # receive SDP answer in response body.
+        pc.addTransceiver("video", direction="recvonly")
+        await pc.setLocalDescription(await pc.createOffer())
+        await self._wait_for_ice_gathering(pc, timeout_s=5.0)
+
+        offer_sdp = pc.localDescription.sdp if pc.localDescription is not None else ""
+        if not offer_sdp:
+            self._set_status("failed", "local SDP offer was empty")
+            return
+
         timeout = aiohttp.ClientTimeout(total=12)
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            # 1. POST the initial offer to the WHEP endpoint
-            async with session.post(self.whep_url, ssl=False) as response:
+            headers = {
+                "Content-Type": "application/sdp",
+                "Accept": "application/sdp",
+            }
+
+            async with session.post(
+                self.whep_url,
+                data=offer_sdp.encode("utf-8"),
+                headers=headers,
+                ssl=False,
+            ) as response:
                 if response.status != 201:
                     body = await response.text()
                     self._set_status("failed", f"POST {response.status}: {body[:240]}")
                     return
-                
-                # The server provides a resource URL for the session in the 'Link' or 'Location' header.
-                resource_url = None
-                link_header = response.headers.get("Link")
-                if link_header:
-                    parts = link_header.split(';')
-                    if len(parts) > 0 and parts[0].startswith('<') and parts[0].endswith('>'):
-                        resource_ref = parts[0][1:-1]
-                        resource_url = urljoin(str(response.url), resource_ref)
 
-                if resource_url is None:
-                    location = response.headers.get("Location")
-                    if location is None:
-                        self._set_status("failed", "WHEP response missing Link/Location header")
-                        return
-                    resource_url = urljoin(str(response.url), location)
-
-
-                # 2. Set the remote description from the server's answer
-                offer = await response.json(content_type=None)
-                if "sdp" not in offer or "type" not in offer:
-                    self._set_status("failed", f"Invalid SDP payload keys: {list(offer.keys())}")
+                answer_sdp = await response.text()
+                if not answer_sdp.strip():
+                    self._set_status("failed", "empty SDP answer from WHEP server")
                     return
-                await pc.setRemoteDescription(RTCSessionDescription(sdp=offer["sdp"], type=offer["type"]))
-                
-                # 3. Create our local answer
-                await pc.setLocalDescription(await pc.createAnswer())
-                
-                payload = {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}
 
-                # 4. PATCH the answer back to the server to establish the connection
-                async with session.patch(resource_url, json=payload, ssl=False) as patch_response:
-                    if patch_response.status != 204:
-                        body = await patch_response.text()
-                        self._set_status("failed", f"PATCH {patch_response.status}: {body[:240]}")
-                        return
+                await pc.setRemoteDescription(
+                    RTCSessionDescription(sdp=answer_sdp, type="answer")
+                )
 
-                    self._set_status("awaiting_track")
-                    # Wait until the connection is closed or fails
-                    while self._running and pc.connectionState != "failed" and pc.connectionState != "closed":
-                        await asyncio.sleep(0.1)
+                self._set_status("awaiting_track")
+                # Wait until the connection is closed or fails
+                while self._running and pc.connectionState != "failed" and pc.connectionState != "closed":
+                    await asyncio.sleep(0.1)
 
         if self._running and pc.connectionState != "closed":
             await self.stop_whep(pc)
