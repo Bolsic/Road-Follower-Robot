@@ -45,6 +45,7 @@ def main():
     last_drive_time = 0
     last_left = 0
     last_right = 0
+    last_no_frame_log_time = 0.0
 
     try:
         # The main control loop
@@ -52,9 +53,21 @@ def main():
             # Get the latest frame from the camera
             frame = receiver.get_frame()
             if frame is None:
+                now = time.time()
+                if now - last_no_frame_log_time > 2.0:
+                    state = receiver.get_debug_state()
+                    print(
+                        "No frame yet | "
+                        f"status={state['status']} "
+                        f"frames={state['frames_received']} "
+                        f"last_frame_age_s={state['last_frame_age_s']} "
+                        f"error={state['last_error']} "
+                        f"url={state['whep_url']}"
+                    )
+                    last_no_frame_log_time = now
                 time.sleep(0.01)
                 continue
-
+            
             h, w = frame.shape[:2]
             img_center = w * cfg.img_center_coef
 
